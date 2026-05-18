@@ -8,8 +8,10 @@ User=gpt
 WorkingDirectory=/home/gpt/mm-strategy-bot
 EnvironmentFile=/home/gpt/mm-strategy-bot/.env
 ExecStart=/home/gpt/mm-strategy-bot/venv/bin/python main.py
-Restart=on-failure
-RestartSec=15
+Restart=always
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=5
 StandardOutput=journal
 StandardError=journal
 
