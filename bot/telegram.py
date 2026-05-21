@@ -1,5 +1,6 @@
 """Telegram bot — commands + notification sender."""
 
+import asyncio
 import logging
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -12,13 +13,23 @@ from db.database import get_conn
 
 log = logging.getLogger(__name__)
 
+# Injected from main.py to avoid circular imports
+_scan_fn = None
+
+
+def set_scan_callback(fn) -> None:
+    global _scan_fn
+    _scan_fn = fn
+
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "MM Strategy Bot active.\n"
-        "Scanning for squeeze/unwind signals on Binance Futures.\n\n"
-        "/status — open positions\n"
-        "/metrics — paper trading stats\n"
+        "🤖 MM Strategy Bot\n\n"
+        "Scans Binance Futures perpetuals for squeeze and unwind signals on low-float tokens.\n\n"
+        "Commands:\n"
+        "/status — open paper positions\n"
+        "/metrics — performance stats\n"
+        "/regime — current market regime\n"
         "/scan — trigger manual scan\n"
         "/help — all commands"
     )
@@ -26,13 +37,15 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Available commands:\n\n"
-        "/start — bot info\n"
-        "/status — open paper positions\n"
-        "/metrics — performance statistics\n"
-        "/scan — trigger manual scan now\n"
-        "/regime — current market regime\n"
-        "/help — this message"
+        "📋 Available commands:\n\n"
+        "/start — bot overview\n"
+        "/status — open paper positions with entry prices\n"
+        "/metrics — win rate, profit factor, PnL breakdown\n"
+        "/regime — BTC EMA20 regime, longs/shorts status\n"
+        "/scan — trigger a manual scan immediately\n"
+        "/help — this message\n\n"
+        "Scans run automatically every 60 min.\n"
+        "Signals are sent when confidence ≥ 65%."
     )
 
 
@@ -42,13 +55,14 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("No open paper positions.")
         return
 
-    lines = [f"📋 Open positions ({len(trades)}):"]
+    lines = [f"📋 Open positions: {len(trades)}"]
     for t in trades:
+        pnl_str = ""
         lines.append(
-            f"\n{t['direction']} {t['symbol']}\n"
+            f"\n{'🟢' if t['direction'] == 'LONG' else '🔴'} {t['direction']} {t['symbol']}\n"
             f"  Entry: {t['entry_price']:.6g}\n"
-            f"  Size: ${t['size_usd']:.0f} ({t['leverage']}x)\n"
-            f"  Opened: {t['opened_at'][:16]}"
+            f"  Size: ${t['size_usd']:.0f}  Leverage: {t['leverage']}x\n"
+            f"  Opened: {t['opened_at'][:16]} UTC"
         )
     await update.message.reply_text("\n".join(lines))
 
@@ -65,37 +79,41 @@ async def cmd_regime(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     conn.close()
 
     if not row:
-        await update.message.reply_text("No regime data yet. Wait for first scan.")
+        await update.message.reply_text("No regime data yet. Wait for the first scan.")
         return
 
     row = dict(row)
-    shorts = "✅" if row["shorts_allowed"] else "🚫"
-    longs = "✅" if row["longs_allowed"] else "🚫"
+    shorts = "✅ allowed" if row["shorts_allowed"] else "🚫 blocked"
+    longs  = "✅ allowed" if row["longs_allowed"]  else "🚫 blocked"
+    above  = "above" if row["btc_price"] > row["btc_ema20"] else "below"
+
     await update.message.reply_text(
         f"🌍 Market Regime\n\n"
-        f"BTC: ${row['btc_price']:,.0f}\n"
-        f"EMA20: ${row['btc_ema20']:,.0f}\n"
-        f"Regime: {row['btc_regime']}\n\n"
-        f"Longs allowed: {longs}\n"
-        f"Shorts allowed: {shorts}\n\n"
-        f"Updated: {row['recorded_at'][:16]}"
+        f"BTC price:  ${row['btc_price']:,.0f}\n"
+        f"EMA20:      ${row['btc_ema20']:,.0f}  ({above} EMA)\n"
+        f"Regime:     {row['btc_regime'].upper()}\n\n"
+        f"Longs:   {longs}\n"
+        f"Shorts:  {shorts}\n\n"
+        f"Updated: {row['recorded_at'][:16]} UTC"
     )
 
 
 async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Manual scan triggered. Results will appear as signals...")
-    # The scan loop picks this up via a shared flag
-    ctx.bot_data["manual_scan"] = True
+    if _scan_fn is None:
+        await update.message.reply_text("Scan function not available.")
+        return
+    await update.message.reply_text("🔍 Manual scan started. Signals will appear if conditions are met...")
+    asyncio.create_task(_scan_fn())
 
 
 def build_app() -> Application:
     app = Application.builder().token(cfg.telegram_token).build()
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("start",   cmd_start))
+    app.add_handler(CommandHandler("help",    cmd_help))
+    app.add_handler(CommandHandler("status",  cmd_status))
     app.add_handler(CommandHandler("metrics", cmd_metrics))
-    app.add_handler(CommandHandler("regime", cmd_regime))
-    app.add_handler(CommandHandler("scan", cmd_scan))
+    app.add_handler(CommandHandler("regime",  cmd_regime))
+    app.add_handler(CommandHandler("scan",    cmd_scan))
     return app
 
 

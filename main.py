@@ -27,7 +27,7 @@ from strategy.signals import generate_signals
 from strategy.mode_a import check_mode_a_exit
 from strategy.mode_b import check_mode_b_exit
 from paper.engine import open_paper_trade, close_paper_trade, get_open_trades
-from bot.telegram import build_app, send_message
+from bot.telegram import build_app, send_message, set_scan_callback
 from bot.formatter import format_signal, format_trade_closed
 
 logging.basicConfig(
@@ -227,13 +227,14 @@ async def main() -> None:
     log.info("Database initialized")
 
     _app = build_app()
+    set_scan_callback(run_full_scan)
 
     await _app.bot.set_my_commands([
-        ("start", "Bot info"),
+        ("start", "Bot overview"),
         ("status", "Open paper positions"),
-        ("metrics", "Performance stats"),
-        ("scan", "Trigger manual scan"),
-        ("regime", "Market regime"),
+        ("metrics", "Win rate, PnL stats"),
+        ("regime", "BTC regime, longs/shorts status"),
+        ("scan", "Trigger manual scan now"),
         ("help", "All commands"),
     ])
 
