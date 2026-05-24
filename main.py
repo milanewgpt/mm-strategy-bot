@@ -162,6 +162,17 @@ async def run_full_scan() -> None:
         conn.commit()
 
         if signal.confidence >= 65:
+            # Skip if already in this symbol — no duplicate notifications
+            cur.execute(
+                "SELECT id FROM paper_trades WHERE symbol = ? AND status = 'open'",
+                (signal.symbol,)
+            )
+            already_open = cur.fetchone()
+
+            if already_open:
+                log.info(f"Already in {signal.symbol}, suppressing notification")
+                continue
+
             try:
                 await send_message(format_signal(signal), _app.bot)
             except Exception as e:
